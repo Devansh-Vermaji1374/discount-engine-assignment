@@ -5,7 +5,7 @@ An intelligent, customer-facing e-commerce discount engine built for the **Opptr
 > **Note on Attribution**: This repository is a candidate implementation based on the official [Opptra Discount Engine starter repository](https://github.com/opptra/discount-engine-assignment). Original starter boilerplate and problem specifications belong to Opptra.
 
 - **GitHub Repository (Fork)**: `https://github.com/Devansh-Vermaji1374/discount-engine-assignment`
-- **Live Deployment URL**: `[PENDING PRODUCTION DEPLOYMENT TO VERCEL]`
+- **Live Deployment URL**: `https://discount-engine-assignment-amber.vercel.app/`
 
 ---
 
