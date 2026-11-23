@@ -7,10 +7,11 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist'
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
-// Set worker source to CDN or local bundled worker for client-side rendering
+// Configure worker source to local bundled Vite asset
 if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '3.11.174'}/pdf.worker.min.js`
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 }
 
 /**
