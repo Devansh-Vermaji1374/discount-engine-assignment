@@ -7,12 +7,13 @@
  * Data shapes:
  *
  * DiscountRule {
- *   ruleId:    string       — e.g. "RULE-01"
- *   scope:     "brand" | "platform"
- *   appliesTo: string       — e.g. "Natura Casa", "Amazon India"
- *   type:      "percentage" | "flat"
- *   value:     number       — percentage as integer (15 = 15%), flat in rupees
- *   stackable: boolean
+ *   ruleId:        string       — e.g. "RULE-01"
+ *   scope:         "brand" | "platform" | "cart"
+ *   appliesTo:     string | null — e.g. "Natura Casa", "Amazon India", null for cart
+ *   type:          "percentage" | "flat"
+ *   value:         number       — percentage as integer (15 = 15%), flat in rupees
+ *   stackable:     boolean
+ *   minCartValue?: number | null
  * }
  *
  * CartItem {
@@ -35,13 +36,34 @@
  *   skippedRules:  string[]
  *   reasoning:     string   — customer-readable explanation
  * }
+ *
+ * CartDiscountOffer {
+ *   triggered:       boolean
+ *   ruleId:          string | null
+ *   type:            "percentage" | "flat"
+ *   value:           number
+ *   threshold:       number
+ *   discountAmount:  number
+ *   reasoning:       string
+ * }
+ *
+ * ProcessedCartSummary {
+ *   itemResults:        DiscountResult[]
+ *   originalTotal:      number
+ *   itemDiscountTotal:  number
+ *   subtotalAfterItems: number
+ *   cartOffer:          CartDiscountOffer | null
+ *   finalCartTotal:     number
+ *   totalSavings:       number
+ * }
  */
 
 /**
  * Returns true if the rule applies to this cart item.
  */
 export function ruleMatchesItem(item, rule) {
-  const normalise = (s) => s.trim().toLowerCase()
+  if (!rule || !item) return false
+  const normalise = (s) => (s ? s.toString().trim().toLowerCase() : '')
   if (rule.scope === 'brand') {
     return normalise(item.brand) === normalise(rule.appliesTo)
   }
@@ -56,11 +78,12 @@ export function ruleMatchesItem(item, rule) {
  * Uses the provided price, not the original base price — important for stacking.
  */
 export function calculateDiscountAmount(price, rule) {
+  if (!rule || price <= 0) return 0
   if (rule.type === 'percentage') {
-    return Math.round(price * rule.value / 100)
+    return Math.round((price * rule.value) / 100)
   }
   if (rule.type === 'flat') {
-    return rule.value
+    return Math.min(price, Math.round(rule.value))
   }
   return 0
 }
@@ -68,8 +91,8 @@ export function calculateDiscountAmount(price, rule) {
 /**
  * Builds the customer-facing reasoning string for an applied rule.
  */
-function ruleToReasoning(rule) {
-  const scopeLabel = rule.scope === 'brand' ? 'Brand' : 'Platform'
+export function ruleToReasoning(rule) {
+  const scopeLabel = rule.scope === 'brand' ? 'Brand' : rule.scope === 'platform' ? 'Platform' : 'Cart'
   if (rule.type === 'percentage') {
     return `${scopeLabel} offer: ${rule.value}% off`
   }
@@ -80,17 +103,18 @@ function ruleToReasoning(rule) {
 }
 
 /**
- * Applies the active discount rules to a single cart item.
+ * Applies the active item-level discount rules to a single cart item.
  * Returns a DiscountResult.
  *
  * Logic:
- *   1. Find all rules that match this item.
- *   2. Among non-stackable rules, pick the one giving the largest discount.
- *   3. Apply any stackable rules on top of that price.
- *   4. Build the reasoning string from what was applied.
+ *   1. Find all rules that match this item (scope is brand or platform).
+ *   2. Among non-stackable rules, pick the one giving the largest discount in rupees.
+ *   3. Apply any stackable rules sequentially on top of that price.
+ *   4. Build the customer reasoning string and record applied / skipped rule IDs.
  */
 export function applyDiscounts(item, rules) {
-  const matchingRules = rules.filter((r) => ruleMatchesItem(item, r))
+  const itemRules = (rules || []).filter((r) => r && (r.scope === 'brand' || r.scope === 'platform'))
+  const matchingRules = itemRules.filter((r) => ruleMatchesItem(item, r))
 
   // No rules match — return base price with explanation
   if (matchingRules.length === 0) {
@@ -131,18 +155,20 @@ export function applyDiscounts(item, rules) {
   const reasoningParts = []
 
   if (winner) {
-    price -= calculateDiscountAmount(price, winner)
+    const winDiscount = calculateDiscountAmount(price, winner)
+    price -= winDiscount
     appliedRules.push(winner.ruleId)
     reasoningParts.push(ruleToReasoning(winner))
   }
 
   for (const rule of stackable) {
-    price -= calculateDiscountAmount(price, rule)
+    const stackDiscount = calculateDiscountAmount(price, rule)
+    price -= stackDiscount
     appliedRules.push(rule.ruleId)
     reasoningParts.push(ruleToReasoning(rule))
   }
 
-  const finalPrice = Math.round(price)
+  const finalPrice = Math.max(0, Math.round(price))
 
   return {
     itemId: item.itemId,
@@ -163,12 +189,101 @@ export function applyDiscounts(item, rules) {
  * Returns an array of DiscountResult objects.
  */
 export function processCart(cartItems, rules) {
-  return cartItems.map((item) => applyDiscounts(item, rules))
+  return (cartItems || []).map((item) => applyDiscounts(item, rules))
 }
 
 /**
  * Sums the final prices across all results.
  */
 export function cartTotal(results) {
-  return results.reduce((sum, r) => sum + r.finalPrice, 0)
+  return (results || []).reduce((sum, r) => sum + r.finalPrice, 0)
+}
+
+/**
+ * Evaluates cart-level discount rules against the subtotal of final item prices.
+ * Cart rules only apply if scope === 'cart' and the subtotal meets minCartValue (if set).
+ * When multiple cart rules exist, selects the one providing the greatest discount.
+ */
+export function evaluateCartOffer(subtotal, rules) {
+  if (subtotal <= 0 || !rules || rules.length === 0) {
+    return null
+  }
+
+  const cartRules = rules.filter((r) => r && r.scope === 'cart')
+  if (cartRules.length === 0) {
+    return null
+  }
+
+  // Find all cart rules whose threshold condition is met
+  const eligibleRules = cartRules.filter((r) => {
+    const threshold = r.minCartValue !== undefined && r.minCartValue !== null ? Number(r.minCartValue) : 0
+    return subtotal >= threshold
+  })
+
+  if (eligibleRules.length === 0) {
+    return null
+  }
+
+  // Calculate discount for each eligible cart rule and pick max saving
+  let bestRule = null
+  let maxDiscount = -1
+
+  for (const rule of eligibleRules) {
+    let discount = 0
+    if (rule.type === 'percentage') {
+      discount = Math.round((subtotal * rule.value) / 100)
+    } else if (rule.type === 'flat') {
+      discount = Math.min(subtotal, Math.round(rule.value))
+    }
+
+    if (discount > maxDiscount) {
+      maxDiscount = discount
+      bestRule = rule
+    }
+  }
+
+  if (!bestRule || maxDiscount <= 0) {
+    return null
+  }
+
+  const threshold = bestRule.minCartValue !== undefined && bestRule.minCartValue !== null ? Number(bestRule.minCartValue) : 0
+  const reasoning = bestRule.type === 'percentage'
+    ? `Cart offer: ${bestRule.value}% off — Rs.${maxDiscount.toLocaleString('en-IN')} saved`
+    : `Cart offer: Rs.${bestRule.value} off — Rs.${maxDiscount.toLocaleString('en-IN')} saved`
+
+  return {
+    triggered: true,
+    ruleId: bestRule.ruleId,
+    type: bestRule.type,
+    value: bestRule.value,
+    threshold,
+    discountAmount: maxDiscount,
+    reasoning,
+  }
+}
+
+/**
+ * Calculates complete pricing breakdown for the entire cart:
+ * item-level discounts, cart subtotal, cart-level offer (if met), and final cart total.
+ */
+export function calculateFullCart(cartItems, rules) {
+  const itemResults = processCart(cartItems, rules)
+  const originalTotal = (cartItems || []).reduce((sum, item) => sum + (Number(item.basePrice) || 0), 0)
+  const subtotalAfterItems = cartTotal(itemResults)
+  const itemDiscountTotal = originalTotal - subtotalAfterItems
+
+  const cartOffer = evaluateCartOffer(subtotalAfterItems, rules)
+  const cartDiscountAmount = cartOffer ? cartOffer.discountAmount : 0
+  const finalCartTotal = Math.max(0, subtotalAfterItems - cartDiscountAmount)
+  const totalSavings = originalTotal - finalCartTotal
+
+  return {
+    itemResults,
+    originalTotal,
+    itemDiscountTotal,
+    subtotalAfterItems,
+    cartOffer,
+    finalCartTotal,
+    totalSavings,
+  }
 }
