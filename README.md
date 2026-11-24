@@ -6,6 +6,7 @@ An intelligent, customer-facing e-commerce discount engine built for the **Opptr
 
 - **GitHub Repository (Fork)**: `https://github.com/Devansh-Vermaji1374/discount-engine-assignment`
 - **Live Deployment URL**: `https://discount-engine-assignment-amber.vercel.app/`
+- **Loom Demo Video**: `https://www.loom.com/share/5547ed98c23846e1b3812f74dc401042`
 
 ---
 
